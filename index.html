@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Port Scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef2f6;--card:#fff;--ink:#14213d;--mute:#5b6b82;--line:#d5dde8;--open:#0f766e;--openbg:#d9f2ee;--closed:#b4443c;--closedbg:#f9e3e1;--warn:#8a5a00;--warnbg:#fdf0d4;--idle:#e4eaf2;--btn:#14213d;--btnink:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#101826;--card:#182235;--ink:#e8eef8;--mute:#93a3bb;--line:#2a3750;--open:#5eead4;--openbg:#0f3a39;--closed:#fca5a5;--closedbg:#42201f;--warn:#fcd34d;--warnbg:#3d3010;--idle:#222f46;--btn:#e8eef8;--btnink:#101826;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Space Grotesk",system-ui,sans-serif;line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:40px 20px 56px}
+h1{font-size:clamp(2rem,6vw,3rem);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+.lead{color:var(--mute);margin:0 0 28px;max-width:52ch}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+label.f{display:block;font-weight:500;margin-bottom:8px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+input[type=text]{flex:1 1 220px;font:inherit;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+button{font:inherit;font-weight:500;padding:12px 22px;border:0;border-radius:10px;background:var(--btn);color:var(--btnink);cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--open);outline-offset:2px}
+.auth{display:flex;gap:10px;align-items:flex-start;margin-top:14px;color:var(--mute);font-size:.95rem}
+.auth input{margin-top:5px}
+.doors{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 8px}
+.door{border-radius:12px;padding:18px 12px 14px;background:var(--idle);text-align:center;transition:background .25s,color .25s}
+.door .n{font-size:1.9rem;font-weight:700;letter-spacing:-.02em}
+.door .s{color:var(--mute);font-size:.9rem}
+.door .st{margin-top:10px;font-weight:700;font-size:.95rem}
+.door.scan{animation:pulse .8s infinite alternate}
+.door.open{background:var(--openbg);color:var(--open)}
+.door.closed{background:var(--closedbg);color:var(--closed)}
+.door.unavailable{background:var(--warnbg);color:var(--warn)}
+.door.open .s,.door.closed .s,.door.unavailable .s{color:inherit;opacity:.85}
+@keyframes pulse{to{background:var(--line)}}
+@media (prefers-reduced-motion:reduce){.door.scan{animation:none}}
+@media (max-width:520px){.doors{grid-template-columns:repeat(2,1fr)}}
+#msg{min-height:1.5em;margin:6px 0 0;font-weight:500}
+.err{color:var(--closed)}
+</style>
+</head>
+<body>
+<main>
+<h1>Which ports are open?</h1>
+<p class="lead">Enter a host you own or have permission to test. Your Python backend checks each port and reports back here.</p>
+
+<div class="panel">
+  <label class="f" for="host">IP address or hostname</label>
+  <div class="row">
+    <input id="host" type="text" placeholder="e.g. 192.168.1.10 or example.com" autocomplete="off" spellcheck="false">
+    <button id="go" disabled>Start scan</button>
+  </div>
+  <label class="auth"><input type="checkbox" id="ok"> I own this host or have written permission to scan it.</label>
+  <div class="doors" id="doors"></div>
+  <p id="msg" role="status" aria-live="polite"></p>
+</div>
+</main>
+
+<script>
+const doors=document.getElementById("doors"),host=document.getElementById("host"),
+      ok=document.getElementById("ok"),go=document.getElementById("go"),msg=document.getElementById("msg");
+let PORTS=[];
+const LABEL={open:"Open",closed:"Closed",unavailable:"Unavailable"};
+
+function draw(){
+  doors.innerHTML=PORTS.map(p=>`<div class="door" id="p${p.port}"><div class="n">${p.port}</div><div class="s">${p.service}</div><div class="st">Not scanned</div></div>`).join("");
+}
+function sync(){go.disabled=!(ok.checked&&host.value.trim()&&PORTS.length)}
+host.oninput=ok.onchange=sync;
+
+fetch("/api/ports").then(r=>r.json()).then(d=>{PORTS=d;draw();sync()})
+  .catch(()=>{msg.className="err";msg.textContent="Can't reach the backend. Start it with: python app.py"});
+
+go.onclick=async()=>{
+  msg.className="";msg.textContent="";draw();go.disabled=true;
+  const counts={open:0};
+  for(const {port} of PORTS){
+    const el=document.getElementById("p"+port);
+    el.classList.add("scan");el.querySelector(".st").textContent="Checking…";
+    try{
+      const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({host:host.value.trim(),port,authorized:ok.checked})});
+      const d=await r.json();
+      el.classList.remove("scan");
+      if(!r.ok||d.status==="invalid_host"){
+        el.querySelector(".st").textContent="Not scanned";
+        msg.className="err";
+        msg.textContent=d.error||"Invalid IP address or hostname.";
+        break;
+      }
+      el.classList.add(d.status);
+      el.querySelector(".st").textContent=LABEL[d.status]||d.status;
+      if(d.status==="open")counts.open++;
+    }catch(e){
+      el.classList.remove("scan");el.querySelector(".st").textContent="Not scanned";
+      msg.className="err";msg.textContent="Lost connection to the backend. Check that python app.py is still running.";
+      break;
+    }
+  }
+  if(!msg.textContent)msg.textContent=`Scan completed: ${counts.open} of ${PORTS.length} ports open.`;
+  go.disabled=false;sync();
+};
+</script>
+</body>
+</html>
